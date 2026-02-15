@@ -36,14 +36,16 @@ type ActivateRequest struct {
 // ActivateResponse is the activation record returned by the server.
 // The server wraps this in {data: ...} via the Success() helper.
 type ActivateResponse struct {
-	ID          string    `json:"id"`
-	LicenseID   string    `json:"license_id"`
-	Fingerprint string    `json:"fingerprint"`
-	Hostname    string    `json:"hostname"`
-	IP          string    `json:"ip"`
-	OS          string    `json:"os,omitempty"`
-	ActivatedAt time.Time `json:"activated_at"`
-	LastSeenAt  time.Time `json:"last_seen_at"`
+	ID          string                 `json:"id"`
+	LicenseID   string                 `json:"license_id"`
+	Fingerprint string                 `json:"fingerprint"`
+	Hostname    string                 `json:"hostname"`
+	IP          string                 `json:"ip"`
+	OS          string                 `json:"os,omitempty"`
+	ActivatedAt time.Time              `json:"activated_at"`
+	LastSeenAt  time.Time              `json:"last_seen_at"`
+	Plan        string                 `json:"plan,omitempty"`
+	Features    map[string]interface{} `json:"features,omitempty"`
 }
 
 // OfflineLicenseFile represents the JSON structure of a signed offline license file.
