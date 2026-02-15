@@ -30,3 +30,13 @@ func WithUserAgent(ua string) ClientOption {
 		o.userAgent = ua
 	}
 }
+
+// WithFingerprint sets a client-level fingerprint that is automatically used
+// in Validate and Activate requests when no per-request fingerprint is provided.
+// This allows the caller to manage fingerprint persistence (e.g. read from DB,
+// generate once and store) instead of relying on automatic generation.
+func WithFingerprint(fp string) ClientOption {
+	return func(o *OnlineClient) {
+		o.fingerprint = fp
+	}
+}

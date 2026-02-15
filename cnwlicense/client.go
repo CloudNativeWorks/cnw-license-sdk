@@ -18,11 +18,12 @@ const (
 
 // OnlineClient communicates with the CNW License Server HTTP API.
 type OnlineClient struct {
-	serverURL  string
-	apiKey     string
-	httpClient *http.Client
-	timeout    time.Duration // applied after all options
-	userAgent  string
+	serverURL   string
+	apiKey      string
+	httpClient  *http.Client
+	timeout     time.Duration // applied after all options
+	userAgent   string
+	fingerprint string
 }
 
 // NewOnlineClient creates a new client for the CNW License Server.
@@ -47,9 +48,20 @@ func NewOnlineClient(serverURL, apiKey string, opts ...ClientOption) *OnlineClie
 	return c
 }
 
+// Fingerprint returns the fingerprint configured via WithFingerprint.
+// Returns an empty string if no fingerprint was set.
+func (c *OnlineClient) Fingerprint() string {
+	return c.fingerprint
+}
+
 // Validate checks whether a license key is valid.
 // The server returns the response directly (not wrapped in {data: ...}).
+// If req.Fingerprint is empty and a client-level fingerprint is set via WithFingerprint,
+// it is automatically used.
 func (c *OnlineClient) Validate(ctx context.Context, req ValidateRequest) (*ValidateResponse, error) {
+	if req.Fingerprint == "" && c.fingerprint != "" {
+		req.Fingerprint = c.fingerprint
+	}
 	var resp ValidateResponse
 	if err := c.doJSON(ctx, "/v1/validate", req, &resp); err != nil {
 		return nil, err
@@ -59,7 +71,12 @@ func (c *OnlineClient) Validate(ctx context.Context, req ValidateRequest) (*Vali
 
 // Activate registers a machine activation for a license key.
 // The server wraps the response in {data: ...}.
+// If req.Fingerprint is empty and a client-level fingerprint is set via WithFingerprint,
+// it is automatically used.
 func (c *OnlineClient) Activate(ctx context.Context, req ActivateRequest) (*ActivateResponse, error) {
+	if req.Fingerprint == "" && c.fingerprint != "" {
+		req.Fingerprint = c.fingerprint
+	}
 	var wrapper struct {
 		Data ActivateResponse `json:"data"`
 	}

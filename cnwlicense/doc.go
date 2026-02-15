@@ -4,11 +4,10 @@
 //
 //	go get github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense
 //
-// It supports three modes of license validation:
+// It supports two modes of license validation:
 //
 //   - Online validation via the CNW License Server HTTP API
 //   - Offline validation using Ed25519-signed license files
-//   - Distributed node management with MongoDB or PostgreSQL registries
 //
 // # Quick Start
 //
@@ -18,18 +17,6 @@
 //	resp, err := client.Validate(ctx, cnwlicense.ValidateRequest{
 //	    LicenseKey: "CNW-XXXX-YYYY-ZZZZ",
 //	})
-//
-// # Distributed Systems
-//
-// For distributed systems that need node-level enforcement:
-//
-//	registry, _ := noderegistry.NewMongoRegistry(ctx, mongoDB)
-//	mgr := cnwlicense.NewManager(
-//	    cnwlicense.WithOnlineClient(client),
-//	    cnwlicense.WithNodeRegistry(registry),
-//	)
-//	info, err := mgr.ValidateAndEnforce(ctx, "CNW-XXXX-YYYY-ZZZZ")
-//	defer mgr.Shutdown(ctx)
 //
 // # Offline (Air-gapped)
 //

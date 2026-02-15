@@ -18,6 +18,7 @@ type ValidateRequest struct {
 type ValidateResponse struct {
 	Valid               bool                   `json:"valid"`
 	Reason              string                 `json:"reason,omitempty"`
+	Plan                string                 `json:"plan,omitempty"`
 	ExpiresAt           *time.Time             `json:"expires_at,omitempty"`
 	Features            map[string]interface{} `json:"features,omitempty"`
 	ActivationRemaining int                    `json:"activation_remaining"`
@@ -74,7 +75,6 @@ type LicenseInfo struct {
 	Features    map[string]interface{} `json:"features,omitempty"`
 	ExpiresAt   *time.Time             `json:"expires_at,omitempty"`
 	Fingerprint string                 `json:"fingerprint"`
-	NodeCount   int                    `json:"node_count,omitempty"`
 }
 
 // HardwareLimits holds the hardware constraints extracted from a license's features map.

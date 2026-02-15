@@ -1,6 +1,6 @@
 # CNW License SDK - Developer Guide
 
-Go SDK for integrating license validation, hardware enforcement, and distributed node management into your applications.
+Go SDK for integrating license validation and hardware enforcement into your applications.
 
 ```
 go get github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense
@@ -14,7 +14,6 @@ go get github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense
 - [Offline License Validation](#offline-license-validation)
 - [Hardware Enforcement](#hardware-enforcement)
 - [Machine Fingerprinting](#machine-fingerprinting)
-- [Distributed Node Registry](#distributed-node-registry)
 - [Manager (Full Orchestration)](#manager-full-orchestration)
 - [Error Handling](#error-handling)
 - [Integration Patterns](#integration-patterns)
@@ -24,31 +23,30 @@ go get github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense
 
 ## Architecture Overview
 
-The SDK has three layers you can use independently or together:
+The SDK has two layers you can use independently or together:
 
 ```
-+---------------------------------------------+
-|              Manager (Orchestrator)          |
-|   ValidateAndEnforce / ActivateNode / Shutdown  |
-+----------+----------------+-----------------+
-           |                |                 |
-    +------+------+  +------+------+  +-------+-------+
-    | OnlineClient|  | Offline     |  | NodeRegistry  |
-    | (HTTP API)  |  | Validator   |  | (Mongo/PG)    |
-    +------+------+  +------+------+  +-------+-------+
-           |                |                 |
-    +------+------+  +------+------+  +-------+-------+
-    | Hardware    |  | Ed25519     |  | Fingerprint   |
-    | Limits      |  | Signatures  |  | Generator     |
-    +-------------+  +-------------+  +---------------+
++--------------------------------------+
+|         Manager (Orchestrator)       |
+|   ValidateAndEnforce / ActivateNode  |
++----------+----------------+----------+
+           |                |
+    +------+------+  +------+------+
+    | OnlineClient|  | Offline     |
+    | (HTTP API)  |  | Validator   |
+    +------+------+  +------+------+
+           |                |
+    +------+------+  +------+------+
+    | Hardware    |  | Ed25519     |
+    | Limits      |  | Signatures  |
+    +-------------+  +-------------+
 ```
 
 | Component | Use Case |
 |-----------|----------|
 | `OnlineClient` | SaaS apps with internet access |
 | `OfflineValidator` | Air-gapped / on-premise environments |
-| `NodeRegistry` | Kubernetes, distributed systems with multiple nodes |
-| `Manager` | All-in-one: combines all of the above |
+| `Manager` | All-in-one: combines validation + hardware enforcement |
 
 ---
 
@@ -94,6 +92,11 @@ client := cnwlicense.NewOnlineClient("https://license.example.com", "your-api-ke
 // With custom timeout
 client := cnwlicense.NewOnlineClient(serverURL, apiKey,
     cnwlicense.WithTimeout(5 * time.Second),
+)
+
+// With a pre-generated fingerprint (e.g., read from DB)
+client := cnwlicense.NewOnlineClient(serverURL, apiKey,
+    cnwlicense.WithFingerprint(savedFingerprint),
 )
 
 // With custom HTTP client (e.g., for proxies, TLS config)
@@ -302,110 +305,9 @@ The same machine always produces the same fingerprint.
 
 ---
 
-## Distributed Node Registry
-
-For distributed systems (Kubernetes clusters, microservice fleets), track which nodes are using the license.
-
-### NodeRegistry Interface
-
-Both MongoDB and PostgreSQL implement this interface:
-
-```go
-type NodeRegistry interface {
-    Register(ctx, NodeInfo) (*NodeInfo, error)     // Upsert by fingerprint
-    Deregister(ctx, fingerprint) error              // Remove node
-    Count(ctx, licenseKey) (int, error)             // Active node count
-    List(ctx, licenseKey) ([]NodeInfo, error)        // All nodes
-    Ping(ctx, fingerprint) error                     // Update last_seen_at
-    Prune(ctx, licenseKey, olderThan) (int, error)  // Remove stale nodes
-    Close(ctx) error                                 // Cleanup
-}
-```
-
-### MongoDB Registry
-
-```go
-import (
-    "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
-    "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense/noderegistry"
-    "go.mongodb.org/mongo-driver/v2/mongo"
-    "go.mongodb.org/mongo-driver/v2/mongo/options"
-)
-
-// Connect to MongoDB (you manage the connection)
-client, _ := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
-db := client.Database("myapp")
-
-// Create registry (auto-creates indexes)
-registry, err := noderegistry.NewMongoRegistry(ctx, db)
-
-// With custom collection name (default: "cnw_license_nodes")
-registry, err := noderegistry.NewMongoRegistry(ctx, db,
-    noderegistry.WithCollectionName("license_nodes"),
-)
-```
-
-### PostgreSQL Registry
-
-```go
-import (
-    "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense/noderegistry"
-    "github.com/jackc/pgx/v5/pgxpool"
-)
-
-// Connect to PostgreSQL (you manage the pool)
-pool, _ := pgxpool.New(ctx, "postgres://user:pass@localhost:5432/myapp")
-
-// Create registry (auto-creates table + indexes)
-registry, err := noderegistry.NewPostgresRegistry(ctx, pool)
-
-// With custom table name (default: "cnw_license_nodes")
-registry, err := noderegistry.NewPostgresRegistry(ctx, pool,
-    noderegistry.WithTableName("license_nodes"),
-)
-```
-
-### Using the Registry Directly
-
-```go
-fingerprint, _ := cnwlicense.GenerateFingerprint()
-
-// Register this node
-node := noderegistry.NodeInfo{
-    Fingerprint: fingerprint,
-    Hostname:    "worker-03",
-    IP:          "10.0.1.53",
-    OS:          "linux",
-    LicenseKey:  "CNW-XXXX-YYYY-ZZZZ",
-}
-registered, err := registry.Register(ctx, node)
-
-// Count active nodes
-count, err := registry.Count(ctx, "CNW-XXXX-YYYY-ZZZZ")
-log.Printf("Active nodes: %d", count)
-
-// Periodic heartbeat (call from a goroutine)
-err = registry.Ping(ctx, fingerprint)
-
-// Remove stale nodes (not seen in 5 minutes)
-removed, err := registry.Prune(ctx, "CNW-XXXX-YYYY-ZZZZ", 5*time.Minute)
-log.Printf("Pruned %d stale nodes", removed)
-
-// List all nodes
-nodes, err := registry.List(ctx, "CNW-XXXX-YYYY-ZZZZ")
-for _, n := range nodes {
-    log.Printf("  %s (%s) last seen: %v", n.Hostname, n.Fingerprint, n.LastSeenAt)
-}
-
-// Graceful shutdown
-err = registry.Deregister(ctx, fingerprint)
-```
-
----
-
 ## Manager (Full Orchestration)
 
-The `Manager` combines online validation, hardware checks, and node registry into a single call.
+The `Manager` combines online validation and hardware checks into a single call.
 
 ### Basic Setup
 
@@ -420,38 +322,39 @@ info, err := mgr.ValidateAndEnforce(ctx, "CNW-XXXX-YYYY-ZZZZ")
 if err != nil {
     log.Fatal(err)
 }
-log.Printf("License valid: %v, Fingerprint: %s", info.Valid, info.Fingerprint)
+log.Printf("License valid: %v, Plan: %s, Fingerprint: %s", info.Valid, info.Plan, info.Fingerprint)
 ```
 
-### With Node Registry (Distributed Systems)
+### With Client-Level Fingerprint
 
 ```go
-registry, _ := noderegistry.NewMongoRegistry(ctx, mongoDB)
-
+// Read fingerprint from DB, or generate and persist it
+client := cnwlicense.NewOnlineClient(serverURL, apiKey,
+    cnwlicense.WithFingerprint(savedFingerprint),
+)
 mgr := cnwlicense.NewManager(
-    cnwlicense.WithOnlineClient(cnwlicense.NewOnlineClient(serverURL, apiKey)),
-    cnwlicense.WithNodeRegistry(registry),
+    cnwlicense.WithOnlineClient(client),
 )
 
 // ValidateAndEnforce does ALL of these automatically:
-// 1. Generate machine fingerprint
+// 1. Resolve fingerprint (from client or auto-generate)
 // 2. Validate license via API
 // 3. Extract hardware limits from features
 // 4. Check CPU count on this machine
-// 5. Register this node in the registry
-// 6. Check total node count against limit
-// 7. Deregister if over limit
 info, err := mgr.ValidateAndEnforce(ctx, "CNW-XXXX-YYYY-ZZZZ")
 if err != nil {
     log.Fatal(err)
 }
-log.Printf("Nodes in cluster: %d", info.NodeCount)
 
-// Activate + register in one call
+// Node count is managed by the application, not the SDK
+limits := cnwlicense.ExtractHardwareLimits(info.Features)
+myNodeCount := getActiveNodeCountFromDB(info.LicenseKey)
+if err := cnwlicense.CheckNodeCount(limits, myNodeCount); err != nil {
+    log.Fatal(err)
+}
+
+// Activate this machine
 activation, err := mgr.ActivateNode(ctx, "CNW-XXXX-YYYY-ZZZZ")
-
-// Graceful shutdown: remove this node from registry
-defer mgr.Shutdown(ctx)
 ```
 
 ---
@@ -567,51 +470,38 @@ func startLicenseChecker(ctx context.Context, client *cnwlicense.OnlineClient, l
 }
 ```
 
-### Pattern 3: Kubernetes Operator with Node Tracking
+### Pattern 3: Kubernetes Operator with License Enforcement
 
-For a Kubernetes operator that must enforce per-node licensing:
+For a Kubernetes operator that must enforce licensing:
 
 ```go
-func initLicenseManager(ctx context.Context) (*cnwlicense.Manager, error) {
-    mongoClient, err := mongo.Connect(options.Client().ApplyURI(os.Getenv("MONGO_URI")))
-    if err != nil {
-        return nil, err
-    }
-    db := mongoClient.Database("myapp")
-
-    registry, err := noderegistry.NewMongoRegistry(ctx, db)
-    if err != nil {
-        return nil, err
-    }
-
-    mgr := cnwlicense.NewManager(
-        cnwlicense.WithOnlineClient(cnwlicense.NewOnlineClient(
-            os.Getenv("LICENSE_SERVER"),
-            os.Getenv("API_KEY"),
-            cnwlicense.WithTimeout(5*time.Second),
-        )),
-        cnwlicense.WithNodeRegistry(registry),
-    )
-
-    return mgr, nil
-}
-
 func main() {
     ctx := context.Background()
-    mgr, err := initLicenseManager(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
 
-    // Validate + enforce node count + register this pod
+    // Use a stable fingerprint for the pod (e.g., from a ConfigMap or PV)
+    client := cnwlicense.NewOnlineClient(
+        os.Getenv("LICENSE_SERVER"),
+        os.Getenv("API_KEY"),
+        cnwlicense.WithFingerprint(os.Getenv("NODE_FINGERPRINT")),
+        cnwlicense.WithTimeout(5*time.Second),
+    )
+    mgr := cnwlicense.NewManager(cnwlicense.WithOnlineClient(client))
+
+    // Validate + enforce hardware limits
     info, err := mgr.ValidateAndEnforce(ctx, os.Getenv("LICENSE_KEY"))
     if err != nil {
         log.Fatalf("License enforcement failed: %v", err)
     }
-    log.Printf("Licensed: %d/%d nodes active", info.NodeCount,
-        cnwlicense.ExtractHardwareLimits(info.Features).MaxNodes)
+    log.Printf("License valid, plan: %s", info.Plan)
 
-    // Start heartbeat
+    // Node count is managed externally (e.g., via your own DB)
+    limits := cnwlicense.ExtractHardwareLimits(info.Features)
+    nodeCount := countActiveNodesInDB(info.LicenseKey)
+    if err := cnwlicense.CheckNodeCount(limits, nodeCount); err != nil {
+        log.Fatalf("Node limit exceeded: %v", err)
+    }
+
+    // Start periodic re-validation
     go func() {
         ticker := time.NewTicker(30 * time.Second)
         defer ticker.Stop()
@@ -624,28 +514,10 @@ func main() {
     sigCh := make(chan os.Signal, 1)
     signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
     <-sigCh
-    mgr.Shutdown(ctx) // removes this node from registry
 }
 ```
 
-### Pattern 4: Stale Node Cleanup (CronJob)
-
-Run periodically to clean up nodes that crashed without graceful shutdown:
-
-```go
-func pruneStaleNodes(ctx context.Context, registry noderegistry.NodeRegistry, licenseKey string) {
-    removed, err := registry.Prune(ctx, licenseKey, 5*time.Minute)
-    if err != nil {
-        log.Printf("Prune error: %v", err)
-        return
-    }
-    if removed > 0 {
-        log.Printf("Pruned %d stale nodes", removed)
-    }
-}
-```
-
-### Pattern 5: Air-gapped On-Premise Deployment
+### Pattern 4: Air-gapped On-Premise Deployment
 
 For environments with no internet access. The customer receives a signed license file from the admin panel.
 
@@ -675,7 +547,7 @@ func checkOfflineLicense() (*cnwlicense.OfflineLicenseData, error) {
 }
 ```
 
-### Pattern 6: Feature-Gated Functionality
+### Pattern 5: Feature-Gated Functionality
 
 Use features map to gate specific functionality:
 
@@ -710,6 +582,7 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 | `NewOnlineClient(serverURL, apiKey, ...ClientOption)` | Create HTTP client |
 | `client.Validate(ctx, ValidateRequest)` | Check license validity |
 | `client.Activate(ctx, ActivateRequest)` | Register machine activation |
+| `client.Fingerprint()` | Get the client-level fingerprint |
 
 #### Client Options
 
@@ -718,6 +591,7 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 | `WithHTTPClient(*http.Client)` | Custom HTTP client |
 | `WithTimeout(time.Duration)` | Request timeout (default: 10s) |
 | `WithUserAgent(string)` | User-Agent header |
+| `WithFingerprint(string)` | Client-level fingerprint (auto-used in requests) |
 
 #### Offline Validator
 
@@ -743,8 +617,7 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 |---|---|
 | `NewManager(...ManagerOption)` | Create orchestrator |
 | `mgr.ValidateAndEnforce(ctx, key)` | Full validation + enforcement pipeline |
-| `mgr.ActivateNode(ctx, key)` | Activate + register node |
-| `mgr.Shutdown(ctx)` | Deregister node on shutdown |
+| `mgr.ActivateNode(ctx, key)` | Activate machine |
 
 #### Manager Options
 
@@ -752,29 +625,4 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 |---|---|
 | `WithOnlineClient(client)` | Set online client |
 | `WithOfflineValidator(v)` | Set offline validator |
-| `WithNodeRegistry(registry)` | Set node registry |
 
-### Package `noderegistry`
-
-```
-import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense/noderegistry"
-```
-
-| Function | Description |
-|---|---|
-| `NewMongoRegistry(ctx, db, ...MongoOption)` | MongoDB-backed registry |
-| `NewPostgresRegistry(ctx, pool, ...PostgresOption)` | PostgreSQL-backed registry |
-| `WithCollectionName(name)` | Custom MongoDB collection |
-| `WithTableName(name)` | Custom PostgreSQL table |
-
-#### NodeRegistry Interface
-
-| Method | Description |
-|---|---|
-| `Register(ctx, NodeInfo)` | Upsert node (idempotent) |
-| `Deregister(ctx, fingerprint)` | Remove node |
-| `Count(ctx, licenseKey)` | Active node count |
-| `List(ctx, licenseKey)` | All nodes for license |
-| `Ping(ctx, fingerprint)` | Update heartbeat |
-| `Prune(ctx, licenseKey, duration)` | Remove stale nodes |
-| `Close(ctx)` | Release resources |
