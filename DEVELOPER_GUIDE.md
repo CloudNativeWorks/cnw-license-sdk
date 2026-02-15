@@ -164,7 +164,7 @@ if err != nil {
         log.Fatal(err)
     }
 }
-log.Printf("Activated: %s (ID: %s)", resp.Fingerprint, resp.ID)
+log.Printf("Activated: %s (ID: %s), Plan: %s", resp.Fingerprint, resp.ID, resp.Plan)
 ```
 
 ---
@@ -202,10 +202,11 @@ v := cnwlicense.NewOfflineValidator()
 data, err := v.VerifyFile("/etc/myapp/license.json")
 if err != nil {
     switch {
+    case errors.Is(err, cnwlicense.ErrLicenseExpired):
+        // data is still returned for expired licenses — you can access plan, features, etc.
+        log.Printf("License expired, plan was: %s", data.Plan)
     case errors.Is(err, cnwlicense.ErrSignatureInvalid):
         log.Fatal("License file has been tampered with")
-    case errors.Is(err, cnwlicense.ErrLicenseExpired):
-        log.Fatal("Offline license has expired")
     case errors.Is(err, cnwlicense.ErrLicenseFileInvalid):
         log.Fatal("Corrupt or malformed license file")
     default:
@@ -214,6 +215,9 @@ if err != nil {
 }
 log.Printf("License: %s, Plan: %s", data.LicenseKey, data.Plan)
 ```
+
+> **Note:** When the license is expired, `Verify`/`VerifyFile` return both the data and `ErrLicenseExpired`.
+> This allows callers to access plan, features, and license key even for expired licenses.
 
 ### Using a Trusted Public Key (Recommended for Production)
 
@@ -302,6 +306,14 @@ The fingerprint is derived from:
 - `/etc/machine-id` (Linux only, best-effort)
 
 The same machine always produces the same fingerprint.
+
+### Override via Environment Variable
+
+Set `CNW_FINGERPRINT` to bypass automatic detection entirely. Useful for containers and Kubernetes pods where hardware identifiers may not be stable:
+
+```bash
+export CNW_FINGERPRINT="my-stable-pod-identifier"
+```
 
 ---
 
@@ -533,8 +545,13 @@ func checkOfflineLicense() (*cnwlicense.OfflineLicenseData, error) {
     )
 
     data, err := v.VerifyFile("/etc/myapp/license.json")
-    if err != nil {
-        return nil, err
+    if err != nil && !errors.Is(err, cnwlicense.ErrLicenseExpired) {
+        return nil, err // signature invalid, file corrupt, etc.
+    }
+    if errors.Is(err, cnwlicense.ErrLicenseExpired) {
+        // data is still available — decide how to handle
+        log.Printf("License expired (plan: %s), shutting down", data.Plan)
+        return data, err
     }
 
     // Optionally enforce hardware limits
@@ -575,6 +592,20 @@ if maxUsers, ok := resp.Features["max_users"].(float64); ok {
 import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 ```
 
+#### Types
+
+| Type | Description |
+|---|---|
+| `ValidateRequest` | Request body for `/v1/validate` — fields: `LicenseKey`, `Fingerprint`, `Version` |
+| `ValidateResponse` | Response from `/v1/validate` — fields: `Valid`, `Reason`, `Plan`, `ExpiresAt`, `Features`, `ActivationRemaining` |
+| `ActivateRequest` | Request body for `/v1/activate` — fields: `LicenseKey`, `Fingerprint`, `Hostname`, `IP`, `OS` |
+| `ActivateResponse` | Response from `/v1/activate` — fields: `ID`, `LicenseID`, `Fingerprint`, `Hostname`, `IP`, `OS`, `ActivatedAt`, `LastSeenAt`, `Plan`, `Features` |
+| `OfflineLicenseFile` | Signed offline license file envelope — fields: `License`, `Signature`, `PublicKey` |
+| `OfflineLicenseData` | License data inside offline file — fields: `LicenseKey`, `CompanyID`, `AppID`, `Plan`, `Features`, `ExpiresAt`, `IssuedAt` |
+| `LicenseInfo` | Unified result from Manager — fields: `Valid`, `LicenseKey`, `Plan`, `Features`, `ExpiresAt`, `Fingerprint` |
+| `HardwareLimits` | Hardware constraints — fields: `MaxCPUPerNode`, `MaxNodes` (0 = unlimited) |
+| `ServerError` | Server error details — fields: `StatusCode`, `Code`, `Message`. Implements `error` interface |
+
 #### Client
 
 | Function / Method | Description |
@@ -598,18 +629,18 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 | Function / Method | Description |
 |---|---|
 | `NewOfflineValidator(...OfflineOption)` | Create offline validator |
-| `validator.VerifyFile(path)` | Verify license from file |
-| `validator.Verify([]byte)` | Verify license from bytes |
+| `validator.VerifyFile(path)` | Verify license from file path |
+| `validator.Verify([]byte)` | Verify license from bytes. Returns data + `ErrLicenseExpired` for expired licenses |
 | `WithTrustedPublicKey(base64)` | Pin server's public key |
 
-#### Hardware
+#### Hardware & Fingerprint
 
 | Function | Description |
 |---|---|
 | `ExtractHardwareLimits(features)` | Parse limits from features map |
-| `CheckCPU(limits)` | Verify CPU count |
-| `CheckNodeCount(limits, count)` | Verify node count |
-| `GenerateFingerprint()` | Generate machine ID (SHA-256) |
+| `CheckCPU(limits)` | Verify CPU count against limit |
+| `CheckNodeCount(limits, count)` | Verify node count against limit |
+| `GenerateFingerprint()` | Generate machine ID (SHA-256). Respects `CNW_FINGERPRINT` env var |
 
 #### Manager
 
@@ -625,4 +656,18 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 |---|---|
 | `WithOnlineClient(client)` | Set online client |
 | `WithOfflineValidator(v)` | Set offline validator |
+
+#### Sentinel Errors
+
+| Error | Description |
+|---|---|
+| `ErrLicenseNotFound` | License key doesn't exist |
+| `ErrLicenseInactive` | License is suspended or revoked |
+| `ErrLicenseExpired` | License has expired |
+| `ErrActivationLimit` | All activation slots are taken |
+| `ErrSignatureInvalid` | Offline signature verification failed |
+| `ErrPublicKeyInvalid` | Ed25519 public key is malformed |
+| `ErrLicenseFileInvalid` | License file JSON is malformed |
+| `ErrCPULimitExceeded` | Machine exceeds CPU limit |
+| `ErrNodeLimitExceeded` | Cluster exceeds node limit |
 
