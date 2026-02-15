@@ -132,9 +132,16 @@ func TestOfflineValidator_Verify_Expired(t *testing.T) {
 	fileJSON, _ := json.Marshal(file)
 
 	v := NewOfflineValidator()
-	_, err := v.Verify(fileJSON)
+	result, err := v.Verify(fileJSON)
 	if !errors.Is(err, ErrLicenseExpired) {
 		t.Errorf("expected ErrLicenseExpired, got %v", err)
+	}
+	// Data should still be returned for expired licenses
+	if result == nil {
+		t.Fatal("expected non-nil data for expired license")
+	}
+	if result.LicenseKey != "CNW-EXPIRED" {
+		t.Errorf("expected license key CNW-EXPIRED, got %s", result.LicenseKey)
 	}
 }
 

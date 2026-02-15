@@ -86,9 +86,10 @@ func (v *OfflineValidator) Verify(raw []byte) (*OfflineLicenseData, error) {
 		return nil, fmt.Errorf("%w: parse license data: %v", ErrLicenseFileInvalid, err)
 	}
 
-	// Check expiration
+	// Check expiration — return data alongside the error so callers can
+	// still access plan, features, license_key etc. for expired licenses.
 	if !data.ExpiresAt.IsZero() && data.ExpiresAt.Before(time.Now()) {
-		return nil, ErrLicenseExpired
+		return &data, ErrLicenseExpired
 	}
 
 	return &data, nil
