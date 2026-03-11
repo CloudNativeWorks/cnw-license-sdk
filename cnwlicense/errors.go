@@ -10,7 +10,8 @@ var (
 	ErrLicenseNotFound = errors.New("license not found")
 	ErrLicenseInactive = errors.New("license is not active")
 	ErrLicenseExpired  = errors.New("license expired")
-	ErrActivationLimit = errors.New("activation limit reached")
+	ErrActivationLimit  = errors.New("activation limit reached")
+	ErrInvalidMetadata  = errors.New("invalid metadata")
 )
 
 // Sentinel errors for offline license verification.
@@ -54,6 +55,8 @@ func mapServerError(se *ServerError) error {
 		}
 	case "ACTIVATION_LIMIT":
 		sentinel = ErrActivationLimit
+	case "VALIDATION_ERROR":
+		sentinel = ErrInvalidMetadata
 	default:
 		return se
 	}

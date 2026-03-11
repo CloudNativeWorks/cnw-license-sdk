@@ -40,3 +40,16 @@ func WithFingerprint(fp string) ClientOption {
 		o.fingerprint = fp
 	}
 }
+
+// WithMetadata sets client-level metadata that is automatically included in
+// Validate and Activate requests when no per-request metadata is provided.
+// Accepts map[string]string for type-safety (the server only accepts string values).
+func WithMetadata(m map[string]string) ClientOption {
+	return func(o *OnlineClient) {
+		md := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			md[k] = v
+		}
+		o.metadata = md
+	}
+}

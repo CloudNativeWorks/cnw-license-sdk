@@ -24,6 +24,7 @@ type OnlineClient struct {
 	timeout     time.Duration // applied after all options
 	userAgent   string
 	fingerprint string
+	metadata    map[string]interface{}
 }
 
 // NewOnlineClient creates a new client for the CNW License Server.
@@ -62,6 +63,9 @@ func (c *OnlineClient) Validate(ctx context.Context, req ValidateRequest) (*Vali
 	if req.Fingerprint == "" && c.fingerprint != "" {
 		req.Fingerprint = c.fingerprint
 	}
+	if req.Metadata == nil && c.metadata != nil {
+		req.Metadata = c.metadata
+	}
 	var resp ValidateResponse
 	if err := c.doJSON(ctx, "/v1/validate", req, &resp); err != nil {
 		return nil, err
@@ -76,6 +80,9 @@ func (c *OnlineClient) Validate(ctx context.Context, req ValidateRequest) (*Vali
 func (c *OnlineClient) Activate(ctx context.Context, req ActivateRequest) (*ActivateResponse, error) {
 	if req.Fingerprint == "" && c.fingerprint != "" {
 		req.Fingerprint = c.fingerprint
+	}
+	if req.Metadata == nil && c.metadata != nil {
+		req.Metadata = c.metadata
 	}
 	var wrapper struct {
 		Data ActivateResponse `json:"data"`

@@ -99,6 +99,14 @@ client := cnwlicense.NewOnlineClient(serverURL, apiKey,
     cnwlicense.WithFingerprint(savedFingerprint),
 )
 
+// With client-level metadata (auto-included in all requests)
+client := cnwlicense.NewOnlineClient(serverURL, apiKey,
+    cnwlicense.WithMetadata(map[string]string{
+        "env":     "production",
+        "cluster": "eu-west-1",
+    }),
+)
+
 // With custom HTTP client (e.g., for proxies, TLS config)
 httpClient := &http.Client{
     Transport: &http.Transport{
@@ -151,6 +159,10 @@ resp, err := client.Activate(ctx, cnwlicense.ActivateRequest{
     Hostname:    "web-server-01",
     IP:          "10.0.1.50",  // optional
     OS:          "linux",      // optional
+    Metadata: map[string]interface{}{  // optional
+        "env":     "production",
+        "region":  "eu-west-1",
+    },
 })
 if err != nil {
     switch {
@@ -160,11 +172,14 @@ if err != nil {
         log.Fatal("Invalid license key")
     case errors.Is(err, cnwlicense.ErrLicenseExpired):
         log.Fatal("License has expired")
+    case errors.Is(err, cnwlicense.ErrInvalidMetadata):
+        log.Fatal("Invalid metadata (values must be strings)")
     default:
         log.Fatal(err)
     }
 }
 log.Printf("Activated: %s (ID: %s), Plan: %s", resp.Fingerprint, resp.ID, resp.Plan)
+// resp.Metadata contains the stored metadata (if any)
 ```
 
 ---
@@ -399,6 +414,8 @@ case errors.Is(err, cnwlicense.ErrCPULimitExceeded):
     // Machine has more CPUs than the license allows
 case errors.Is(err, cnwlicense.ErrNodeLimitExceeded):
     // Cluster has more nodes than the license allows
+case errors.Is(err, cnwlicense.ErrInvalidMetadata):
+    // Metadata validation failed (e.g., non-string values)
 }
 ```
 
@@ -424,6 +441,7 @@ The SDK automatically maps known server error codes to sentinel errors:
 | `FORBIDDEN` (message: "license expired") | 403 | `ErrLicenseExpired` |
 | `FORBIDDEN` (other) | 403 | `ErrLicenseInactive` |
 | `ACTIVATION_LIMIT` | 409 | `ErrActivationLimit` |
+| `VALIDATION_ERROR` | 422 | `ErrInvalidMetadata` |
 | Others | varies | `*ServerError` |
 
 ---
@@ -596,10 +614,10 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 
 | Type | Description |
 |---|---|
-| `ValidateRequest` | Request body for `/v1/validate` — fields: `LicenseKey`, `Fingerprint`, `Version` |
+| `ValidateRequest` | Request body for `/v1/validate` — fields: `LicenseKey`, `Fingerprint`, `Version`, `Metadata` |
 | `ValidateResponse` | Response from `/v1/validate` — fields: `Valid`, `Reason`, `Plan`, `ExpiresAt`, `Features`, `ActivationRemaining` |
-| `ActivateRequest` | Request body for `/v1/activate` — fields: `LicenseKey`, `Fingerprint`, `Hostname`, `IP`, `OS` |
-| `ActivateResponse` | Response from `/v1/activate` — fields: `ID`, `LicenseID`, `Fingerprint`, `Hostname`, `IP`, `OS`, `ActivatedAt`, `LastSeenAt`, `Plan`, `Features` |
+| `ActivateRequest` | Request body for `/v1/activate` — fields: `LicenseKey`, `Fingerprint`, `Hostname`, `IP`, `OS`, `Metadata` |
+| `ActivateResponse` | Response from `/v1/activate` — fields: `ID`, `LicenseID`, `Fingerprint`, `Hostname`, `IP`, `OS`, `Metadata`, `ActivatedAt`, `LastSeenAt`, `Plan`, `Features` |
 | `OfflineLicenseFile` | Signed offline license file envelope — fields: `License`, `Signature`, `PublicKey` |
 | `OfflineLicenseData` | License data inside offline file — fields: `LicenseKey`, `CompanyID`, `AppID`, `Plan`, `Features`, `ExpiresAt`, `IssuedAt` |
 | `LicenseInfo` | Unified result from Manager — fields: `Valid`, `LicenseKey`, `Plan`, `Features`, `ExpiresAt`, `Fingerprint` |
@@ -623,6 +641,7 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 | `WithTimeout(time.Duration)` | Request timeout (default: 10s) |
 | `WithUserAgent(string)` | User-Agent header |
 | `WithFingerprint(string)` | Client-level fingerprint (auto-used in requests) |
+| `WithMetadata(map[string]string)` | Client-level metadata (auto-included when no per-request metadata is set) |
 
 #### Offline Validator
 
@@ -670,4 +689,5 @@ import "github.com/CloudNativeWorks/cnw-license-sdk/cnwlicense"
 | `ErrLicenseFileInvalid` | License file JSON is malformed |
 | `ErrCPULimitExceeded` | Machine exceeds CPU limit |
 | `ErrNodeLimitExceeded` | Cluster exceeds node limit |
+| `ErrInvalidMetadata` | Metadata validation failed (e.g., non-string values) |
 

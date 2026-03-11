@@ -280,3 +280,190 @@ func TestOnlineClient_ServerError(t *testing.T) {
 		t.Errorf("expected code INTERNAL_ERROR, got %s", se.Code)
 	}
 }
+
+func TestOnlineClient_Activate_WithMetadata(t *testing.T) {
+	activatedAt := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ActivateRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		if req.Metadata == nil {
+			t.Fatal("expected metadata in request, got nil")
+		}
+		if req.Metadata["env"] != "production" {
+			t.Errorf("expected metadata env=production, got %v", req.Metadata["env"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"id":           "act-002",
+				"fingerprint":  req.Fingerprint,
+				"hostname":     req.Hostname,
+				"ip":           "",
+				"metadata":     req.Metadata,
+				"activated_at": activatedAt,
+				"last_seen_at": activatedAt,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOnlineClient(server.URL, "test-key")
+	resp, err := client.Activate(context.Background(), ActivateRequest{
+		LicenseKey:  "CNW-TEST-1234",
+		Fingerprint: "abc123",
+		Hostname:    "node-1",
+		Metadata:    map[string]interface{}{"env": "production"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Metadata == nil {
+		t.Fatal("expected metadata in response, got nil")
+	}
+	if resp.Metadata["env"] != "production" {
+		t.Errorf("expected metadata env=production, got %v", resp.Metadata["env"])
+	}
+}
+
+func TestOnlineClient_Validate_WithMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ValidateRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		if req.Metadata == nil {
+			t.Fatal("expected metadata in request, got nil")
+		}
+		if req.Metadata["region"] != "eu-west-1" {
+			t.Errorf("expected metadata region=eu-west-1, got %v", req.Metadata["region"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ValidateResponse{Valid: true})
+	}))
+	defer server.Close()
+
+	client := NewOnlineClient(server.URL, "test-key")
+	_, err := client.Validate(context.Background(), ValidateRequest{
+		LicenseKey: "CNW-TEST-1234",
+		Metadata:   map[string]interface{}{"region": "eu-west-1"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOnlineClient_Activate_InvalidMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "VALIDATION_ERROR",
+				"message": "metadata values must be strings",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewOnlineClient(server.URL, "test-key")
+	_, err := client.Activate(context.Background(), ActivateRequest{
+		LicenseKey:  "CNW-TEST-1234",
+		Fingerprint: "abc123",
+		Hostname:    "node-1",
+		Metadata:    map[string]interface{}{"bad": 123},
+	})
+	if !errors.Is(err, ErrInvalidMetadata) {
+		t.Errorf("expected ErrInvalidMetadata, got %v", err)
+	}
+
+	var se *ServerError
+	if !errors.As(err, &se) {
+		t.Fatal("expected errors.As to return ServerError")
+	}
+	if se.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("expected status 422, got %d", se.StatusCode)
+	}
+}
+
+func TestOnlineClient_ClientLevelMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&raw)
+
+		md, ok := raw["metadata"].(map[string]interface{})
+		if !ok || md == nil {
+			t.Fatal("expected metadata in request from client-level WithMetadata")
+		}
+		if md["cluster"] != "prod-1" {
+			t.Errorf("expected metadata cluster=prod-1, got %v", md["cluster"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/validate" {
+			json.NewEncoder(w).Encode(ValidateResponse{Valid: true})
+		} else {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": map[string]interface{}{
+					"id":           "act-003",
+					"fingerprint":  "fp1",
+					"hostname":     "h1",
+					"ip":           "",
+					"activated_at": time.Now(),
+					"last_seen_at": time.Now(),
+				},
+			})
+		}
+	}))
+	defer server.Close()
+
+	client := NewOnlineClient(server.URL, "test-key",
+		WithMetadata(map[string]string{"cluster": "prod-1"}),
+	)
+
+	// Validate should auto-fill metadata
+	_, err := client.Validate(context.Background(), ValidateRequest{LicenseKey: "CNW-TEST-1234"})
+	if err != nil {
+		t.Fatalf("validate: unexpected error: %v", err)
+	}
+
+	// Activate should auto-fill metadata
+	_, err = client.Activate(context.Background(), ActivateRequest{
+		LicenseKey:  "CNW-TEST-1234",
+		Fingerprint: "fp1",
+		Hostname:    "h1",
+	})
+	if err != nil {
+		t.Fatalf("activate: unexpected error: %v", err)
+	}
+
+	// Request-level metadata should override client-level
+	overrideServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&raw)
+
+		md := raw["metadata"].(map[string]interface{})
+		if md["cluster"] != nil {
+			t.Errorf("expected client-level cluster to be overridden, got %v", md["cluster"])
+		}
+		if md["custom"] != "val" {
+			t.Errorf("expected custom=val, got %v", md["custom"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ValidateResponse{Valid: true})
+	}))
+	defer overrideServer.Close()
+
+	client2 := NewOnlineClient(overrideServer.URL, "test-key",
+		WithMetadata(map[string]string{"cluster": "prod-1"}),
+	)
+	_, err = client2.Validate(context.Background(), ValidateRequest{
+		LicenseKey: "CNW-TEST-1234",
+		Metadata:   map[string]interface{}{"custom": "val"},
+	})
+	if err != nil {
+		t.Fatalf("override validate: unexpected error: %v", err)
+	}
+}

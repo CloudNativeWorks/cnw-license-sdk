@@ -8,9 +8,10 @@ import (
 // ValidateRequest is the request body for the /v1/validate endpoint.
 // Fields match api/internal/service/activation_service.go.
 type ValidateRequest struct {
-	LicenseKey  string `json:"license_key"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	Version     string `json:"version,omitempty"`
+	LicenseKey  string                 `json:"license_key"`
+	Fingerprint string                 `json:"fingerprint,omitempty"`
+	Version     string                 `json:"version,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ValidateResponse is the response from the /v1/validate endpoint.
@@ -26,11 +27,12 @@ type ValidateResponse struct {
 
 // ActivateRequest is the request body for the /v1/activate endpoint.
 type ActivateRequest struct {
-	LicenseKey  string `json:"license_key"`
-	Fingerprint string `json:"fingerprint"`
-	Hostname    string `json:"hostname"`
-	IP          string `json:"ip,omitempty"`
-	OS          string `json:"os,omitempty"`
+	LicenseKey  string                 `json:"license_key"`
+	Fingerprint string                 `json:"fingerprint"`
+	Hostname    string                 `json:"hostname"`
+	IP          string                 `json:"ip,omitempty"`
+	OS          string                 `json:"os,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ActivateResponse is the activation record returned by the server.
@@ -42,6 +44,7 @@ type ActivateResponse struct {
 	Hostname    string                 `json:"hostname"`
 	IP          string                 `json:"ip"`
 	OS          string                 `json:"os,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 	ActivatedAt time.Time              `json:"activated_at"`
 	LastSeenAt  time.Time              `json:"last_seen_at"`
 	Plan        string                 `json:"plan,omitempty"`
