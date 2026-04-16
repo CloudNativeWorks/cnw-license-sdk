@@ -20,9 +20,11 @@ func ExampleNewOnlineClient() {
 }
 
 func ExampleNewOfflineValidator() {
-	v := cnwlicense.NewOfflineValidator(
-		cnwlicense.WithTrustedPublicKey("base64-encoded-public-key"),
-	)
+	v, err := cnwlicense.NewOfflineValidator("base64-encoded-public-key")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
 	data, err := v.VerifyFile("/etc/myapp/license.json")
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)

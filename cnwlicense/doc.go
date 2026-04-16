@@ -22,6 +22,6 @@
 //
 // For air-gapped environments with Ed25519-signed license files:
 //
-//	v := cnwlicense.NewOfflineValidator(cnwlicense.WithTrustedPublicKey(pubKeyBase64))
+//	v, err := cnwlicense.NewOfflineValidator(pubKeyBase64)
 //	data, err := v.VerifyFile("/etc/myapp/license.json")
 package cnwlicense

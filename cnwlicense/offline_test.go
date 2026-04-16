@@ -42,7 +42,10 @@ func TestOfflineValidator_Verify_Success(t *testing.T) {
 	}
 	fileJSON, _ := json.Marshal(file)
 
-	v := NewOfflineValidator()
+	v, err := NewOfflineValidator(base64.StdEncoding.EncodeToString(pub))
+	if err != nil {
+		t.Fatalf("unexpected error creating validator: %v", err)
+	}
 	result, err := v.Verify(fileJSON)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -52,64 +55,6 @@ func TestOfflineValidator_Verify_Success(t *testing.T) {
 	}
 	if result.Plan != "enterprise" {
 		t.Errorf("expected plan enterprise, got %s", result.Plan)
-	}
-}
-
-func TestOfflineValidator_Verify_WithTrustedKey(t *testing.T) {
-	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-
-	data := OfflineLicenseData{
-		LicenseKey: "CNW-TRUSTED",
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
-		IssuedAt:   time.Now(),
-	}
-
-	rawLicense, sig := signLicenseData(priv, data)
-
-	file := OfflineLicenseFile{
-		License:   rawLicense,
-		Signature: base64.StdEncoding.EncodeToString(sig),
-		PublicKey: "", // no embedded key
-	}
-	fileJSON, _ := json.Marshal(file)
-
-	v := NewOfflineValidator(WithTrustedPublicKey(base64.StdEncoding.EncodeToString(pub)))
-	result, err := v.Verify(fileJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.LicenseKey != "CNW-TRUSTED" {
-		t.Errorf("expected license key CNW-TRUSTED, got %s", result.LicenseKey)
-	}
-}
-
-func TestOfflineValidator_Verify_TrustedKeyOverridesEmbedded(t *testing.T) {
-	trustedPub, trustedPriv, _ := ed25519.GenerateKey(rand.Reader)
-	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
-
-	data := OfflineLicenseData{
-		LicenseKey: "CNW-OVERRIDE",
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
-		IssuedAt:   time.Now(),
-	}
-
-	rawLicense, sig := signLicenseData(trustedPriv, data)
-
-	file := OfflineLicenseFile{
-		License:   rawLicense,
-		Signature: base64.StdEncoding.EncodeToString(sig),
-		PublicKey: base64.StdEncoding.EncodeToString(otherPub), // wrong embedded key
-	}
-	fileJSON, _ := json.Marshal(file)
-
-	// Trusted key should override the embedded one
-	v := NewOfflineValidator(WithTrustedPublicKey(base64.StdEncoding.EncodeToString(trustedPub)))
-	result, err := v.Verify(fileJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.LicenseKey != "CNW-OVERRIDE" {
-		t.Errorf("expected license key CNW-OVERRIDE, got %s", result.LicenseKey)
 	}
 }
 
@@ -131,7 +76,7 @@ func TestOfflineValidator_Verify_Expired(t *testing.T) {
 	}
 	fileJSON, _ := json.Marshal(file)
 
-	v := NewOfflineValidator()
+	v, _ := NewOfflineValidator(base64.StdEncoding.EncodeToString(pub))
 	result, err := v.Verify(fileJSON)
 	if !errors.Is(err, ErrLicenseExpired) {
 		t.Errorf("expected ErrLicenseExpired, got %v", err)
@@ -167,41 +112,48 @@ func TestOfflineValidator_Verify_TamperedData(t *testing.T) {
 	}
 	fileJSON, _ := json.Marshal(file)
 
-	v := NewOfflineValidator()
+	v, _ := NewOfflineValidator(base64.StdEncoding.EncodeToString(pub))
 	_, err := v.Verify(fileJSON)
 	if !errors.Is(err, ErrSignatureInvalid) {
 		t.Errorf("expected ErrSignatureInvalid, got %v", err)
 	}
 }
 
-func TestOfflineValidator_Verify_WrongKey(t *testing.T) {
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
+func TestOfflineValidator_Verify_KeySubstitution(t *testing.T) {
+	// Attacker generates their own key pair
+	attackerPub, attackerPriv, _ := ed25519.GenerateKey(rand.Reader)
+	// Server's real key pair
+	serverPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
 	data := OfflineLicenseData{
-		LicenseKey: "CNW-WRONGKEY",
+		LicenseKey: "CNW-FAKE",
+		Plan:       "enterprise",
+		Features:   map[string]interface{}{"max_nodes": float64(9999)},
 		ExpiresAt:  time.Now().Add(24 * time.Hour),
 		IssuedAt:   time.Now(),
 	}
 
-	rawLicense, sig := signLicenseData(priv, data)
+	// Attacker signs with their own key
+	rawLicense, sig := signLicenseData(attackerPriv, data)
 
+	// Attacker embeds their own public key in the file
 	file := OfflineLicenseFile{
 		License:   rawLicense,
 		Signature: base64.StdEncoding.EncodeToString(sig),
-		PublicKey: base64.StdEncoding.EncodeToString(otherPub), // wrong key
+		PublicKey: base64.StdEncoding.EncodeToString(attackerPub),
 	}
 	fileJSON, _ := json.Marshal(file)
 
-	v := NewOfflineValidator()
+	// SDK uses the server's trusted key → attacker's signature must fail
+	v, _ := NewOfflineValidator(base64.StdEncoding.EncodeToString(serverPub))
 	_, err := v.Verify(fileJSON)
 	if !errors.Is(err, ErrSignatureInvalid) {
-		t.Errorf("expected ErrSignatureInvalid, got %v", err)
+		t.Errorf("expected ErrSignatureInvalid for key substitution attack, got %v", err)
 	}
 }
 
 func TestOfflineValidator_Verify_InvalidJSON(t *testing.T) {
-	v := NewOfflineValidator()
+	v, _ := NewOfflineValidator("dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXk=") // 32 bytes base64
 	_, err := v.Verify([]byte("not json"))
 	if !errors.Is(err, ErrLicenseFileInvalid) {
 		t.Errorf("expected ErrLicenseFileInvalid, got %v", err)
@@ -209,18 +161,17 @@ func TestOfflineValidator_Verify_InvalidJSON(t *testing.T) {
 }
 
 func TestOfflineValidator_Verify_MissingFields(t *testing.T) {
-	v := NewOfflineValidator()
+	v, _ := NewOfflineValidator("dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXk=")
 	_, err := v.Verify([]byte(`{"license": {}, "signature": ""}`))
 	if !errors.Is(err, ErrLicenseFileInvalid) {
 		t.Errorf("expected ErrLicenseFileInvalid, got %v", err)
 	}
 }
 
-func TestOfflineValidator_Verify_NoPublicKey(t *testing.T) {
-	v := NewOfflineValidator()
-	_, err := v.Verify([]byte(`{"license": {"license_key":"test"}, "signature": "abc"}`))
+func TestOfflineValidator_RequiresTrustedKey(t *testing.T) {
+	_, err := NewOfflineValidator("")
 	if !errors.Is(err, ErrPublicKeyInvalid) {
-		t.Errorf("expected ErrPublicKeyInvalid, got %v", err)
+		t.Errorf("expected ErrPublicKeyInvalid for empty key, got %v", err)
 	}
 }
 
@@ -246,7 +197,7 @@ func TestOfflineValidator_VerifyFile(t *testing.T) {
 	filePath := filepath.Join(tmpDir, "license.json")
 	os.WriteFile(filePath, fileJSON, 0644)
 
-	v := NewOfflineValidator()
+	v, _ := NewOfflineValidator(base64.StdEncoding.EncodeToString(pub))
 	result, err := v.VerifyFile(filePath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -256,8 +207,48 @@ func TestOfflineValidator_VerifyFile(t *testing.T) {
 	}
 }
 
+func TestOfflineValidator_Verify_PrettyPrintedFile(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+
+	data := OfflineLicenseData{
+		LicenseKey: "CNW-PRETTY",
+		CompanyID:  "comp-001",
+		Plan:       "enterprise",
+		Features:   map[string]interface{}{"max_nodes": float64(5), "max_cpu_per_node": float64(8)},
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		IssuedAt:   time.Now(),
+	}
+
+	// Server signs compact JSON
+	rawLicense, sig := signLicenseData(priv, data)
+
+	// Simulate user pretty-printing the file (e.g. jq .)
+	var prettyLicense json.RawMessage
+	json.MarshalIndent(json.RawMessage(rawLicense), "    ", "    ")
+	// MarshalIndent on RawMessage just re-formats it
+	indented, _ := json.MarshalIndent(json.RawMessage(rawLicense), "", "    ")
+	prettyLicense = json.RawMessage(indented)
+
+	file := OfflineLicenseFile{
+		License:   prettyLicense,
+		Signature: base64.StdEncoding.EncodeToString(sig),
+		PublicKey: base64.StdEncoding.EncodeToString(pub),
+	}
+	// Pretty-print the whole file too
+	fileJSON, _ := json.MarshalIndent(file, "", "  ")
+
+	v, _ := NewOfflineValidator(base64.StdEncoding.EncodeToString(pub))
+	result, err := v.Verify(fileJSON)
+	if err != nil {
+		t.Fatalf("pretty-printed file should verify successfully, got: %v", err)
+	}
+	if result.LicenseKey != "CNW-PRETTY" {
+		t.Errorf("expected license key CNW-PRETTY, got %s", result.LicenseKey)
+	}
+}
+
 func TestOfflineValidator_VerifyFile_NotFound(t *testing.T) {
-	v := NewOfflineValidator()
+	v, _ := NewOfflineValidator("dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXk=")
 	_, err := v.VerifyFile("/nonexistent/license.json")
 	if err == nil {
 		t.Fatal("expected error for missing file")

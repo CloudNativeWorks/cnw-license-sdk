@@ -1,6 +1,7 @@
 package cnwlicense
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -16,12 +17,17 @@ type OfflineValidator struct {
 }
 
 // NewOfflineValidator creates a new offline license validator.
-func NewOfflineValidator(opts ...OfflineOption) *OfflineValidator {
-	v := &OfflineValidator{}
+// A trusted public key is required to prevent key substitution attacks.
+// Get the key from the Settings page or GET /v1/settings/public-key.
+func NewOfflineValidator(trustedPublicKey string, opts ...OfflineOption) (*OfflineValidator, error) {
+	if trustedPublicKey == "" {
+		return nil, fmt.Errorf("%w: trusted public key is required", ErrPublicKeyInvalid)
+	}
+	v := &OfflineValidator{trustedPublicKey: trustedPublicKey}
 	for _, opt := range opts {
 		opt(v)
 	}
-	return v
+	return v, nil
 }
 
 // VerifyFile reads a license file from disk and verifies its signature.
@@ -50,14 +56,8 @@ func (v *OfflineValidator) Verify(raw []byte) (*OfflineLicenseData, error) {
 		return nil, ErrLicenseFileInvalid
 	}
 
-	// Determine which public key to use
-	pubKeyBase64 := file.PublicKey
-	if v.trustedPublicKey != "" {
-		pubKeyBase64 = v.trustedPublicKey
-	}
-	if pubKeyBase64 == "" {
-		return nil, ErrPublicKeyInvalid
-	}
+	// Always use the trusted public key — never fall back to the embedded key.
+	pubKeyBase64 := v.trustedPublicKey
 
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubKeyBase64)
 	if err != nil {
@@ -72,17 +72,24 @@ func (v *OfflineValidator) Verify(raw []byte) (*OfflineLicenseData, error) {
 		return nil, fmt.Errorf("%w: signature decode: %v", ErrSignatureInvalid, err)
 	}
 
-	// Verify the signature over the raw license JSON bytes.
-	// The server signs json.Marshal(OfflineLicenseData), so we verify
-	// against the raw JSON bytes of the "license" field.
+	// Normalize license JSON to compact form before verification.
+	// The server signs compact json.Marshal() output, but the file may have
+	// been pretty-printed (e.g. jq, editors). json.Compact removes whitespace
+	// so the bytes match regardless of formatting.
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, file.License); err != nil {
+		return nil, fmt.Errorf("%w: compact license JSON: %v", ErrLicenseFileInvalid, err)
+	}
+	licenseBytes := compacted.Bytes()
+
 	pubKey := ed25519.PublicKey(pubKeyBytes)
-	if !ed25519.Verify(pubKey, file.License, sigBytes) {
+	if !ed25519.Verify(pubKey, licenseBytes, sigBytes) {
 		return nil, ErrSignatureInvalid
 	}
 
-	// Parse the license data
+	// Parse the license data from the verified bytes
 	var data OfflineLicenseData
-	if err := json.Unmarshal(file.License, &data); err != nil {
+	if err := json.Unmarshal(licenseBytes, &data); err != nil {
 		return nil, fmt.Errorf("%w: parse license data: %v", ErrLicenseFileInvalid, err)
 	}
 
